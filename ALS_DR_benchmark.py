@@ -195,7 +195,7 @@ def main():
     n_components = 5
     iter = 40
     num_repeat = 10
-    save_folder = "Output_files_BCD_new1"
+    save_folder = "Output_files"
     # save_folder = "Output_files_BCD_twitter0"
 
     synthetic_data = True
