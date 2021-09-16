@@ -49,11 +49,12 @@ class ALS_DR():
             self.loading = ini_loading
 
         self.alpha = alpha
+        self.X_norm = np.linalg.norm(X.reshape(-1, 1), ord=2)
 
     def initialize_loading(self):
         ### loading = python dict of [U1, U2, \cdots, Un], each Ui is I_i x R array
         loading = {}
-        for i in np.arange(self.n_modes):  # n_modes = X.ndim -1 where -1 for the last `batch mode'
+        for i in np.arange(self.n_modes):
             loading.update({'U' + str(i): np.random.rand(self.X.shape[i], self.n_components)})
         return loading
 
@@ -108,7 +109,7 @@ class ALS_DR():
             B_U[r, :] = B_r.reshape(self.X.shape[j])
         return B_U
 
-    def update_code_within_radius(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1):
+    def update_code_within_radius_trusted(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1):
         '''
         Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
         Use row-wise projected gradient descent
@@ -140,6 +141,161 @@ class ALS_DR():
             H1_old = H1
             i = i+1
             # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
+
+        return H1
+
+    def update_code_within_radius_trusted2(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1, subsample_size=None):
+        '''
+        Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
+        Use row-wise projected gradient descent
+        Do NOT sparsecode the whole thing and then project -- instable
+        12/5/2020 Lyu
+
+        For NTF problems, X is usually tall and thin so it is better to subsample from rows
+        12/25/2020 Lyu
+        '''
+
+        print('!!!! X.shape', X.shape)
+        print('!!!! W.shape', W.shape)
+        print('!!!! H0.shape', H0.shape)
+
+        A = W.T @ W
+        B = W.T @ X
+
+        print('!!! A.shape', A.shape)
+        print('!!! B.shape', B.shape)
+
+
+        H1 = H0.copy()
+        i = 0
+        dist = 1
+        idx = np.arange(X.shape[1])
+        while (i < sub_iter) and (dist > stopping_diff):
+            H1_old = H1.copy()
+            for k in np.arange(H0.shape[0]):
+                if subsample_size is not None:
+                    idx = np.random.randint(X.shape[1], size=min(subsample_size, H0.shape[1]-1))
+
+                print('!!! idx.shape', len(idx))
+
+                grad = (np.dot(A[k, :], H1[:,idx]) - B[k, idx] + alpha * np.ones(len(idx)))
+                # grad = (np.dot(A[k, :], H1[:,idx]) - W[:,k].T @ X[:,idx] + alpha * np.ones(len(idx)))
+                # H1[k, :] = H1[k,:] - (1 / (A[k, k] + np.linalg.norm(grad, 2))) * grad
+                H1[k, idx] = H1[k, idx] - (1 / (((i + 10) ** (0.5)) * (A[k, k] + 1))) * grad
+                H1[k, idx] = np.maximum(H1[k, idx], np.zeros(shape=(len(idx),)))  # nonnegativity constraint
+                if r is not None:  # usual sparse coding without radius restriction
+                    d = np.linalg.norm(H1 - H0, 2)
+                    H1 = H0 + (r / max(r, d)) * (H1 - H0)
+                H0 = H1
+
+            dist = np.linalg.norm(H1 - H1_old, 2) / np.linalg.norm(H1_old, 2)
+            # print('!!! dist', dist)
+            # H1_old = H1
+            i = i + 1
+            # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
+
+
+        return H1
+
+    def update_code_within_radius(self, X, W, H0, r, alpha=0, sub_iter=[10], stopping_grad_ratio=0.05, subsample_ratio=None, nonnegativity=True):
+        '''
+        Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
+        Use row-wise projected gradient descent
+        Do NOT sparsecode the whole thing and then project -- instable
+        12/5/2020 Lyu
+
+        For NTF problems, X is usually tall and thin so it is better to subsample from rows
+        12/25/2020 Lyu
+
+        Apply single round of AdaGrad for rows, stop when gradient norm is small and do not make update
+        12/27/2020 Lyu
+        '''
+
+        # print('!!!! X.shape', X.shape)
+        # print('!!!! W.shape', W.shape)
+        # print('!!!! H0.shape', H0.shape)
+
+        H1 = H0.copy()
+        i = 0
+        dist = 1
+        idx = np.arange(X.shape[0])
+        # print('!!! X.shape', X.shape)
+        while (i < np.random.choice(sub_iter)):
+            if_continue = np.ones(H0.shape[0])  # indexed by rows of H
+            H1_old = H1.copy()
+            b = 10
+            if (subsample_ratio is not None) and (X.shape[0]>X.shape[1]):
+                idx = np.random.randint(X.shape[0], size=X.shape[0]//subsample_ratio)
+                A = W[idx,:].T @ W[idx,:]
+                B = W[idx,:].T @ X[idx,:]
+                # print('!! row subsampled')
+                # print('!! len(idx)', len(idx))
+
+            elif (subsample_ratio is not None) and (X.shape[0]<= X.shape[1]):
+                idx = np.random.randint(X.shape[1], size=X.shape[1]//subsample_ratio)
+                A = W[:,:].T @ W[:,:]
+                B = W[:,:].T @ X[:,idx]
+            else:
+                A = W[:,:].T @ W[:,:]
+                B = W[:,:].T @ X[:,:]
+
+            for k in [k for k in np.arange(H0.shape[0]) if if_continue[k]>0.5]:
+
+                grad = (np.dot(A[k, :], H1) - B[k, :] + alpha * np.ones(H0.shape[1]))
+                # grad = (np.dot(A[k, :], H1[:,idx]) - W[:,k].T @ X[:,idx] + alpha * np.ones(len(idx)))
+                # H1[k, :] = H1[k,:] - (1 / (A[k, k] + np.linalg.norm(grad, 2))) * grad
+                # H1[k, :] = H1[k, :] - (1 / (((i +np.random.choice([10])) ** (0.5)) * (A[k, k] + 1))) * grad
+
+                grad_norm = np.linalg.norm(grad, 2)
+                # if k == 0:
+                #    print('!!! grad_norm= %f, k= %i' % (grad_norm/np.linalg.norm(H1_old, 2), k))
+
+                # print('!!! grad_norm', grad_norm)
+                # print('!!! np.linalg.norm(H1_old, 2)', np.linalg.norm(H1_old, 2))
+                # print('!!! grad_norm= %f, k= %i' % (grad_norm/np.linalg.norm(H1_old, 2), k))
+                # b = np.sqrt(b**2 + grad_norm**2)   # AdaGrad step size
+                # H1[k, :] = H1[k, :] - (1 / b) * grad
+                # H1[k, :] = H1[k, :] - (1 / (((i +np.random.choice([1])) ** (0.5)) * (A[k, k] + 1))) * grad
+                # step_size = (1 / (((i + 1) ** (1)) * (A[k, k] + 1)))
+                step_size = 1 / (np.trace(A)) # use the whole trace
+                # print('--- np.trace(A)', np.trace(A))
+                """
+                9/15/21: Make initial step size small to improve stability of the algorithm
+                (e.g., prevent loss increasing after hitting the bottom)
+                """
+
+                # step_size = (1 / (((i + 1) ** (1))))
+                # print('-- step_size before correction:', step_size)
+                if r is not None:  # usual sparse coding without radius restriction
+
+                    d = step_size * grad_norm
+                    step_size = (r / max(r, d)) * step_size
+                    #print('-- step_size after correction:', step_size)
+
+                #print('-- change made', step_size * grad_norm / np.linalg.norm(H1_old, 2))
+                if step_size * grad_norm / np.linalg.norm(H1_old, 2) > stopping_grad_ratio:
+                    H1[k, :] = H1[k, :] - step_size * grad
+                else:
+                    #print('-- update not made ---')
+                    if_continue[k] = 1  # stop making changes when negligible
+                    # print('!!! update skipped' )
+                # print('!!! H1.shape', H1.shap
+                if nonnegativity:
+                    H1[k,:] = np.maximum(H1[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
+
+                """
+                if r is not None:  # usual sparse coding without radius restriction
+                    d = np.linalg.norm(H1 - H0, 2)
+                    H1 = H0 + (r / max(r, d)) * (H1 - H0)
+                H0 = H1
+                """
+
+            # dist = np.linalg.norm(H1 - H1_old, 2) / np.linalg.norm(H1_old, 2)
+            # print('!!! dist', dist)
+            # H1_old = H1
+            i = i + 1
+            # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
+
 
         return H1
 
@@ -179,6 +335,8 @@ class ALS_DR():
             if_compute_recons_error=False,
             save_folder='Output_files',
             search_radius_const = 1000,
+            subsample_ratio=None,
+            nonnegativity=True,
             output_results=False):
         '''
         Given data tensor X and initial loading matrices W_ini, find loading matrices W by Alternating Least Squares
@@ -186,7 +344,9 @@ class ALS_DR():
         '''
 
         X = self.X
-
+        normalization = np.linalg.norm(X.reshape(-1,1),1)/np.product(X.shape) # avg entry of X
+        print('!!! avg entry of X', normalization)
+        #X = X/normalization
 
         if DEBUG:
             print('sparse_code')
@@ -195,7 +355,7 @@ class ALS_DR():
 
         n_modes = len(X.shape)
         if ini_loading is not None:
-            loading = ini_loading
+            loading = ini_loading.copy() # put .copy() Otherwise initial loading would change
         else:
             loading = {}
             for i in np.arange(X.ndim):
@@ -204,6 +364,14 @@ class ALS_DR():
         result_dict = {}
         time_error = np.zeros(shape=[0, 2])
         elapsed_time = 0
+
+
+        # Initial reconstruction error
+        if if_compute_recons_error:
+            error = self.compute_recons_error(data=X, loading=loading)
+            # error *= normalization
+            time_error = np.append(time_error, np.array([[0, error]]), axis=0)
+            print('!!! Reconstruction error at iteration %i = %f.3' % (0, error))
 
         for step in trange(int(iter)):
             start = time.time()
@@ -218,13 +386,24 @@ class ALS_DR():
 
                 X_new_mat = X_new.reshape(-1, X_new.shape[-1])
                 CPdict = self.out(loading_new, drop_last_mode=True)
-
                 W = np.zeros(shape=(X_new_mat.shape[0], self.n_components))
                 for j in np.arange(self.n_components):
                     W[:, j] = CPdict.get('A' + str(j)).reshape(-1, 1)[:, 0]
 
                 if beta is None:  # usual nonnegative sparse coding
-                    Code = self.update_code_within_radius(X_new_mat, W, U.T, r=None, alpha=0)
+                    """
+                    coder = SparseCoder(dictionary=W.T, transform_n_nonzero_coefs=None,
+                                        transform_alpha=0, transform_algorithm='lasso_lars', positive_code=True)
+                    # alpha = L1 regularization parameter.
+                    Code = coder.transform(X_new_mat.T)
+                    """
+                    Code = self.update_code_within_radius(X_new_mat, W, U.T, r=None, alpha=0,
+                                                        subsample_ratio=subsample_ratio,
+                                                        stopping_grad_ratio=0.0001,
+                                                        sub_iter = [5],
+                                                        nonnegativity=nonnegativity)
+
+
                 else:
                     if search_radius_const is None:
                             search_radius_const = 10000
@@ -232,26 +411,26 @@ class ALS_DR():
                     search_radius = search_radius_const * (float(step+1))**(-beta)/np.log(float(step+2))
 
                     # sparse code within radius
-                    Code = self.update_code_within_radius(X_new_mat, W, U.T, search_radius, alpha=0)
+                    Code = self.update_code_within_radius(X_new_mat, W, U.T, search_radius,
+                                                          alpha=0, subsample_ratio=subsample_ratio,
+                                                          sub_iter = [5],
+                                                          stopping_grad_ratio=0.0001,
+                                                          nonnegativity=nonnegativity)
 
-                    # print('!!!!! search_radius_const', search_radius_const)
                 U_new = Code.T.reshape(U.shape)
 
                 loading.update({'U' + str(mode): U_new})
-
                 #print('!!! Iteration %i: %i th loading matrix updated..' % (step, mode))
 
             end = time.time()
             elapsed_time += end - start
 
             if if_compute_recons_error:
-                CPdict = self.out(loading, drop_last_mode=False)
-                recons = np.zeros(X.shape)
-                for j in np.arange(len(loading.keys())):
-                    recons += CPdict.get('A' + str(j))
-                error = np.linalg.norm((X - recons).reshape(-1, 1), ord=2)
+                error = self.compute_recons_error(data=X, loading=loading)
+                # error *= normalization
                 time_error = np.append(time_error, np.array([[elapsed_time, error]]), axis=0)
                 print('!!! Reconstruction error at iteration %i = %f.3' % (step, error))
+
 
         result_dict.update({'loading': loading})
         # result_dict.update({'CPdict': self.out(loading)}) ### this is very expensive
@@ -265,12 +444,14 @@ class ALS_DR():
         else:
             return loading
 
+
+
     def MU(self,
-            iter=100,
-            ini_loading=None,
-            if_compute_recons_error=False,
-            save_folder='Output_files',
-            output_results=False):
+           iter=100,
+           ini_loading=None,
+           if_compute_recons_error=False,
+           save_folder='Output_files',
+           output_results=False):
         '''
         Given data tensor X and initial loading matrices W_ini, find loading matrices W by Multiplicative Update
         Ref: Shashua, Hazan, "Non-Negative Tensor Factorization with Applications to Statistics and Computer Vision" (2005)
@@ -285,7 +466,7 @@ class ALS_DR():
 
         n_modes = len(X.shape)
         if ini_loading is not None:
-            loading = ini_loading
+            loading = ini_loading.copy() # put .copy() Otherwise initial loading would change
         else:
             loading = {}
             for i in np.arange(X.ndim):
@@ -294,6 +475,12 @@ class ALS_DR():
         result_dict = {}
         time_error = np.zeros(shape=[0, 2])
         elapsed_time = 0
+
+        # Initial reconstruction error
+        if if_compute_recons_error:
+            error = self.compute_recons_error(data=self.X, loading=loading)
+            time_error = np.append(time_error, np.array([[0, error]]), axis=0)
+            print('!!! Reconstruction error at iteration %i = %f.3' % (0, error))
 
         for step in trange(int(iter)):
             start = time.time()
@@ -319,7 +506,7 @@ class ALS_DR():
                 # print('!!! W.shape', W.shape)
                 # print('!!! U.shape', U.shape)
                 # print('!!! V.shape', V.shape)
-                U_new = U.T * (W.T @ V)/(W.T @ W @ U.T)
+                U_new = U.T * (W.T @ V) / (W.T @ W @ U.T)
                 loading.update({'U' + str(mode): U_new.T})
 
                 # print('!!! Iteration %i: %i th loading matrix updated..' % (step, mode))
@@ -328,13 +515,9 @@ class ALS_DR():
             elapsed_time += end - start
 
             if if_compute_recons_error:
-                CPdict = self.out(loading, drop_last_mode=False)
-                recons = np.zeros(X.shape)
-                for j in np.arange(len(loading.keys())):
-                    recons += CPdict.get('A' + str(j))
-                error = np.linalg.norm((X - recons).reshape(-1, 1), ord=2)
+                error = self.compute_recons_error(data=self.X, loading=loading)
                 time_error = np.append(time_error, np.array([[elapsed_time, error]]), axis=0)
-                # print('!!! Reconstruction error at iteration %i = %f.3' % (step, error))
+                print('!!! Reconstruction error at iteration %i = %f.3' % (step, error))
 
         result_dict.update({'loading': loading})
         # result_dict.update({'CPdict': self.out(loading)}) ### this is very expensive
@@ -347,3 +530,13 @@ class ALS_DR():
             return result_dict
         else:
             return loading
+
+
+    def compute_recons_error(self, data, loading):
+        CPdict = self.out(loading, drop_last_mode=False)
+        recons = np.zeros(data.shape)
+        for j in np.arange(len(loading.keys())):
+            recons += CPdict.get('A' + str(j))
+        error = np.linalg.norm((data - recons).reshape(-1, 1), ord=2)
+        error /= self.X_norm
+        return error
