@@ -84,94 +84,6 @@ class ALS_DR():
             CPdict.update({'A' + str(i): A})
         return CPdict
 
-    def update_code_within_radius_trusted(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1):
-        '''
-        Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
-        Use row-wise projected gradient descent
-        Do NOT sparsecode the whole thing and then project -- instable
-        12/5/2020 Lyu
-        Using sklearn's SparseCoder for ALS seems unstable (errors could increase due to initial overshooting and projection)
-        '''
-
-        A = W.T @ W
-        B = W.T @ X
-        H1 = H0.copy()
-        i = 0
-        dist = 1
-        while (i<sub_iter) and (dist>stopping_diff):
-            H1_old = H1.copy()
-            for k in np.arange(H0.shape[0]):
-                grad = (np.dot(A[k,:], H1) - B[k,:]+alpha*np.ones(H0.shape[1]))
-                # H1[k, :] = H1[k,:] - (1 / (A[k, k] + np.linalg.norm(grad, 2))) * grad
-                H1[k, :] = H1[k,:] - (1 / ( ((i+5)**(0.5))* (A[k, k] + 1))) * grad
-                # use i+10 to ensure monotonicity (but gets slower)
-                H1[k,:] = np.maximum(H1[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
-                if r is not None:  # usual sparse coding without radius restriction
-                    d = np.linalg.norm(H1 - H0, 2)
-                    H1 = H0 + (r/max(r, d))*(H1 - H0)
-                H0 = H1
-
-            dist = np.linalg.norm(H1 - H1_old, 2)/np.linalg.norm(H1_old, 2)
-            # print('!!! dist', dist)
-            H1_old = H1
-            i = i+1
-            # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
-
-        return H1
-
-    def update_code_within_radius_trusted2(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1, subsample_size=None):
-        '''
-        Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
-        Use row-wise projected gradient descent
-        Do NOT sparsecode the whole thing and then project -- instable
-        12/5/2020 Lyu
-
-        For NTF problems, X is usually tall and thin so it is better to subsample from rows
-        12/25/2020 Lyu
-        '''
-
-        print('!!!! X.shape', X.shape)
-        print('!!!! W.shape', W.shape)
-        print('!!!! H0.shape', H0.shape)
-
-        A = W.T @ W
-        B = W.T @ X
-
-        print('!!! A.shape', A.shape)
-        print('!!! B.shape', B.shape)
-
-
-        H1 = H0.copy()
-        i = 0
-        dist = 1
-        idx = np.arange(X.shape[1])
-        while (i < sub_iter) and (dist > stopping_diff):
-            H1_old = H1.copy()
-            for k in np.arange(H0.shape[0]):
-                if subsample_size is not None:
-                    idx = np.random.randint(X.shape[1], size=min(subsample_size, H0.shape[1]-1))
-
-                print('!!! idx.shape', len(idx))
-
-                grad = (np.dot(A[k, :], H1[:,idx]) - B[k, idx] + alpha * np.ones(len(idx)))
-                # grad = (np.dot(A[k, :], H1[:,idx]) - W[:,k].T @ X[:,idx] + alpha * np.ones(len(idx)))
-                # H1[k, :] = H1[k,:] - (1 / (A[k, k] + np.linalg.norm(grad, 2))) * grad
-                H1[k, idx] = H1[k, idx] - (1 / (((i + 10) ** (0.5)) * (A[k, k] + 1))) * grad
-                H1[k, idx] = np.maximum(H1[k, idx], np.zeros(shape=(len(idx),)))  # nonnegativity constraint
-                if r is not None:  # usual sparse coding without radius restriction
-                    d = np.linalg.norm(H1 - H0, 2)
-                    H1 = H0 + (r / max(r, d)) * (H1 - H0)
-                H0 = H1
-
-            dist = np.linalg.norm(H1 - H1_old, 2) / np.linalg.norm(H1_old, 2)
-            # print('!!! dist', dist)
-            # H1_old = H1
-            i = i + 1
-            # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
-
-
-        return H1
-
     def update_code_within_radius(self, X, W, H0, r, alpha=0,
                                   sub_iter=[2], stopping_grad_ratio=0.0001,
                                   subsample_ratio=None, nonnegativity=True,
@@ -198,7 +110,7 @@ class ALS_DR():
         dist = 1
         idx = np.arange(X.shape[0])
         H1_old = H1.copy()
-        
+
         A = W.T @ W
         B = W.T @ X
 
@@ -248,15 +160,9 @@ class ALS_DR():
                     #print('recons loss tensor', self.compute_recons_error(data=self.X, loading=self.loading))
                 """
 
-                # H1 = H1_temp
 
-
-            # dist = np.linalg.norm(H1 - H1_old, 2) / np.linalg.norm(H1_old, 2)
-            # print('!!! dist', dist)
-            # H1_old = H1
             i = i + 1
-            # print('!!!! i', i)  # mostly the loop finishes at i=1 except the first round
-
+            
 
         return H1
 
