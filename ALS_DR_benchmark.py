@@ -16,29 +16,33 @@ def initialize_loading(data_shape=[10,10,10], n_components=5):
         loading.update({'U' + str(i): np.random.rand(data_shape[i], n_components)})
     return loading
 
-def Out_tensor(loading):
+def out(loading, drop_last_mode=False):
     ### given loading, take outer product of respected columns to get CPdict
+    ### Use drop_last_mode for ALS
     CPdict = {}
-    n_modes = len(loading.keys())
-    n_components = loading.get('U0').shape[1]
-    print('!!! n_modes', n_modes)
-    print('!!! n_components', n_components)
-
+    n_components = loading.get("U0").shape[1]
     for i in np.arange(n_components):
         A = np.array([1])
-        for j in np.arange(n_modes):
+        if drop_last_mode:
+            n_modes_multiplied = len(loading.keys()) - 1
+        else:
+            n_modes_multiplied = len(loading.keys())  # also equals self.X_dim - 1
+        for j in np.arange(n_modes_multiplied):
             loading_factor = loading.get('U' + str(j))  ### I_i X n_components matrix
             # print('loading_factor', loading_factor)
             A = np.multiply.outer(A, loading_factor[:, i])
         A = A[0]
         CPdict.update({'A' + str(i): A})
-    print('!!! CPdict.keys()', CPdict.keys())
+    return CPdict
 
-    X = np.zeros(shape=CPdict.get('A0').shape)
-    for j in np.arange(len(loading.keys())):
-        X += CPdict.get('A' + str(j))
+def Out_tensor(loading):
+    ### given loading, take outer product of respected columns to get CPdict
+    CPdict = out(loading, drop_last_mode=False)
+    recons = np.zeros(CPdict.get('A0').shape)
+    for j in np.arange(len(CPdict.keys())):
+        recons += CPdict.get('A' + str(j))
 
-    return X
+    return recons
 
 
 def ALS_run(X,
@@ -93,85 +97,66 @@ def MU_run(X,
                            output_results=output_results)
     return result_dict
 
-def plot_benchmark_errors_list(results_list_dict, MU_result, name=1, save_folder=None):
 
-    ALS_results_names = [name for name in results_list_dict.keys()]
-    d1 = results_list_dict.get(ALS_results_names[0])
-    n_components = d1.get('n_components')
 
-    print('!!! ALS_results_names', ALS_results_names)
+def plot_benchmark_errors(full_result_list, save_path):
 
-    time_records = {}
-    ALS_errors = {}
-    f_ALS_interpolated = {}
-    # for i in np.arange(len(ALS_results_names)):
-    #      ALS_errors.update({'ALS_errors' + str(i) : results_list_dict.get(str(ALS_results_names[i])).get('timed_errors_trials')})
+    time_records = []
+    errors = []
+    f_interpolated_list = []
 
-    # max duration
+    # max duration and time records
     x_all_max = 0
-    for i in np.arange(len(ALS_results_names)):
-        ALS_errors0 = results_list_dict.get(ALS_results_names[i]).get('timed_errors_trials')
-        x_all_max = max(x_all_max, max(ALS_errors0[:, :, -1][:, 0]))
+    for i in np.arange(len(full_result_list)):
+        errors0 = full_result_list[i].get('timed_errors_trials')
+        x_all_max = max(x_all_max, max(errors0[:, :, -1][:, 0]))
 
     x_all = np.linspace(0, x_all_max, num=101, endpoint=True)
 
-    for i in np.arange(len(ALS_results_names)):
-        ALS_errors0 = results_list_dict.get(ALS_results_names[i]).get('timed_errors_trials')
-        time_records.update({'x_all_ALS'+ str(i) : x_all[x_all < min(ALS_errors0[:, :, -1][:, 0])]})
-
-    # x_all_common = x_all_ALS1[range(np.round(len(x_all_ALS1) // 1.1).astype(int))]
-    # x_all_MU = x_all_common
-
-    MU_errors = MU_result.get('timed_errors_trials')
-    x_all_MU = x_all[x_all < min(MU_errors[:, :, -1][:, 0])]
-    n_trials = MU_errors.shape[0]
-
+    for i in np.arange(len(full_result_list)):
+        errors0 = full_result_list[i].get('timed_errors_trials')
+        time_records.append(x_all[x_all < min(errors0[:, :, -1][:, 0])])
 
     # interpolate data and have common carrier
-    for j in np.arange(len(ALS_results_names)):
-        f_ALS_interpolated0 = []
-        ALS_errors0 = results_list_dict.get(ALS_results_names[j]).get('timed_errors_trials')
-        for i in np.arange(ALS_errors0.shape[0]):
-            f_ALS0 = interp1d(ALS_errors0[i, 0, :], ALS_errors0[i, 1, :], fill_value="extrapolate")
-            x_all_ALS0 = time_records.get('x_all_ALS'+ str(j))
-            f_ALS_interpolated0.append(f_ALS0(x_all_ALS0))
-
-        f_ALS_interpolated0 = np.asarray(f_ALS_interpolated0)
-        f_ALS_interpolated.update({'f_ALS_interpolated'+str(j): f_ALS_interpolated0})
-
-    f_MU_interpolated = []
-    for i in np.arange(MU_errors.shape[0]):
-        f_MU = interp1d(MU_errors[i, 0, :], MU_errors[i, 1, :], fill_value="extrapolate")
-        f_MU_interpolated.append(f_MU(x_all_MU))
-    f_MU_interpolated = np.asarray(f_MU_interpolated)
-    f_MU_avg = np.sum(f_MU_interpolated, axis=0) / f_MU_interpolated.shape[0]  ### axis-0 : trials
-    f_MU_std = np.std(f_MU_interpolated, axis=0)
+    for i in np.arange(len(full_result_list)):
+        errors0 = full_result_list[i].get('timed_errors_trials')
+        f0_interpolated = []
+        for j in np.arange(errors0.shape[0]): # trials for same setting
+            f0 = interp1d(errors0[j, 0, :], errors0[j, 1, :], fill_value="extrapolate")
+            x_all_0 = time_records[i]
+            f0_interpolated.append(f0(x_all_0))
+        f0_interpolated = np.asarray(f0_interpolated)
+        f_interpolated_list.append(f0_interpolated)
 
     # make figure
-    color_list = ['r', 'b', 'c', 'k']
-    fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
-    for i in np.arange(len(ALS_results_names)):
-        f_ALS_interpolated0 = f_ALS_interpolated.get('f_ALS_interpolated' + str(i))
-        f_ALS_avg0 = np.sum(f_ALS_interpolated0, axis=0) / f_ALS_interpolated0.shape[0]  ### axis-0 : trials
-        f_ALS_std0 = np.std(f_ALS_interpolated0, axis=0)
-        # print('!!!! f_ALS_avg0_' + str(i), f_ALS_avg0)
+    search_radius_const = full_result_list[0].get('search_radius_const')
+    color_list = ['g', 'k', 'r', 'c', 'b']
+    marker_list = ['*', '|', 'x', 'o', '+']
+    fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(6, 5))
+    for i in np.arange(len(full_result_list)):
+        f0_interpolated = f_interpolated_list[i]
+        f_avg0 = np.sum(f0_interpolated, axis=0) / f0_interpolated.shape[0]  ### axis-0 : trials
+        f_std0 = np.std(f0_interpolated, axis=0)
 
-        x_all_ALS0 = x_all_ALS0 = time_records.get('x_all_ALS'+ str(i))
+        x_all_0 = time_records[i]
         color = color_list[i % len(color_list)]
-        markers, caps, bars = axs.errorbar(x_all_ALS0, f_ALS_avg0, yerr=f_ALS_std0,
-                                           fmt=color+'-', marker='*', label=ALS_results_names[i], errorevery=5)
-        axs.fill_between(x_all_ALS0, f_ALS_avg0 - f_ALS_std0, f_ALS_avg0 + f_ALS_std0, facecolor=color, alpha=0.1)
+        marker = marker_list[i % len(marker_list)]
 
-    # Add MU plots
-    markers, caps, bars = axs.errorbar(x_all_MU, f_MU_avg, yerr=f_MU_std,
-                                       fmt='g-', marker='x', label='MU', errorevery=5)
-    axs.fill_between(x_all_MU, f_MU_avg - f_MU_std, f_MU_avg + f_MU_std, facecolor='g', alpha=0.2)
+        result_dict = full_result_list[i]
+        beta = result_dict.get("beta")
+        if beta is None:
+            label0 = result_dict.get("method")
+        else:
+            label0 = result_dict.get("method") + " ($\\beta=${}, $c'=${})".format(beta, search_radius_const)
 
+        markers, caps, bars = axs.errorbar(x_all_0, f_avg0, yerr=f_std0,
+                                           fmt=color+'-', marker=marker, label=label0, errorevery=5)
+        axs.fill_between(x_all_0, f_avg0 - f_std0, f_avg0 + f_std0, facecolor=color, alpha=0.1)
 
     # min_max duration
     x_all_min_max = []
-    for i in np.arange(len(ALS_results_names)):
-        x_all_ALS0 = time_records.get('x_all_ALS'+ str(i))
+    for i in np.arange(len(time_records)):
+        x_all_ALS0 = time_records[i]
         x_all_min_max.append(max(x_all_ALS0))
 
     x_all_min_max = min(x_all_min_max)
@@ -180,159 +165,47 @@ def plot_benchmark_errors_list(results_list_dict, MU_result, name=1, save_folder
 
     [bar.set_alpha(0.5) for bar in bars]
     # axs.set_ylim(0, np.maximum(np.max(f_OCPDL_avg + f_OCPDL_std), np.max(f_ALS_avg + f_ALS_std)) * 1.1)
-    axs.set_xlabel('Elapsed time (s)', fontsize=14)
-    axs.set_ylabel('Reconstruction error', fontsize=12)
-    plt.suptitle('Reconstruction error benchmarks')
+    axs.set_xlabel('Elapsed time (s)', fontsize=13)
+    axs.set_ylabel('Reconstruction error', fontsize=13)
+    data_name = full_result_list[0].get('data_name')
+    title = data_name
+    plt.suptitle(title, fontsize=13)
     axs.legend(fontsize=13)
     plt.tight_layout()
-    plt.suptitle('Reconstruction error benchmarks', fontsize=13)
     plt.subplots_adjust(0.1, 0.1, 0.9, 0.9, 0.00, 0.00)
-    if save_folder is None:
-        root = 'Output_files_BCD'
-    else:
-        root = save_folder
 
-    plt.savefig(root + '/benchmark_plot_errorbar' + '_ntrials_' + str(n_trials) + "_" + "_ncomps_" + str(
-        n_components) + "_" + str(name) + ".pdf")
+    plt.savefig(save_path)
 
 
 
-
-def plot_benchmark_errors(ALS_result0, ALS_result1, ALS_result2, MU_result, name=1, save_folder=None):
-    n_components = ALS_result1.get('n_components')
-
-    ALS_errors0 = ALS_result0.get('timed_errors_trials')  # shape (# trials) x (2 for time, error) x (iterations)
-    ALS_errors1 = ALS_result1.get('timed_errors_trials')  # shape (# trials) x (2 for time, error) x (iterations)
-    ALS_errors2 = ALS_result2.get('timed_errors_trials')
-    MU_errors = MU_result.get('timed_errors_trials')
-    n_trials = ALS_errors1.shape[0]
-
-    print('!! ALS_errors0.shape', ALS_errors0.shape)
-    print('!! ALS_errors1.shape', ALS_errors1.shape)
-    print('!! ALS_errors2.shape', ALS_errors2.shape)
-    print('!! MU_errors.shape', MU_errors.shape)
-    print('!!!!! MU_errors', MU_errors)
-
-    x_all_max = max(min(ALS_errors1[:, :, -1][:, 0]), min(MU_errors[:, :, -1][:, 0]),
-                    min(ALS_errors2[:, :, -1][:, 0]))
-    x_all = np.linspace(0, x_all_max, num=101, endpoint=True)
-    x_all_ALS0 = x_all[x_all < min(ALS_errors0[:, :, -1][:, 0])]
-    x_all_ALS1 = x_all[x_all < min(ALS_errors1[:, :, -1][:, 0])]
-    x_all_ALS2 = x_all[x_all < min(ALS_errors2[:, :, -1][:, 0])]
-    x_all_MU = x_all[x_all < min(MU_errors[:, :, -1][:, 0])]
-
-    x_all_common = x_all_ALS1[range(np.round(len(x_all_ALS1) // 1.1).astype(int))]
-    # x_all_MU = x_all_common
-
-    print('!!! x_all', x_all)
-    # interpolate data and have common carrier
-
-    f_ALS_interpolated0 = []
-    f_ALS_interpolated1 = []
-    f_ALS_interpolated2 = []
-    f_MU_interpolated = []
-
-    for i in np.arange(MU_errors.shape[0]):
-        f_ALS0 = interp1d(ALS_errors0[i, 0, :], ALS_errors0[i, 1, :], fill_value="extrapolate")
-        f_ALS_interpolated0.append(f_ALS0(x_all_ALS0))
-
-        f_ALS1 = interp1d(ALS_errors1[i, 0, :], ALS_errors1[i, 1, :], fill_value="extrapolate")
-        f_ALS_interpolated1.append(f_ALS1(x_all_ALS1))
-
-        f_ALS2 = interp1d(ALS_errors2[i, 0, :], ALS_errors2[i, 1, :], fill_value="extrapolate")
-        f_ALS_interpolated2.append(f_ALS2(x_all_ALS2))
-
-        f_MU = interp1d(MU_errors[i, 0, :], MU_errors[i, 1, :], fill_value="extrapolate")
-        f_MU_interpolated.append(f_MU(x_all_MU))
-
-    f_ALS_interpolated0 = np.asarray(f_ALS_interpolated0)
-    f_ALS_interpolated1 = np.asarray(f_ALS_interpolated1)
-    f_ALS_interpolated2 = np.asarray(f_ALS_interpolated2)
-    f_MU_interpolated = np.asarray(f_MU_interpolated)
-
-    f_ALS_avg0 = np.sum(f_ALS_interpolated0, axis=0) / f_ALS_interpolated0.shape[0]  ### axis-0 : trials
-    f_ALS_std0 = np.std(f_ALS_interpolated0, axis=0)
-    # print('!!! f_ALS_std0', f_ALS_std0)
-
-    f_ALS_avg1 = np.sum(f_ALS_interpolated1, axis=0) / f_ALS_interpolated1.shape[0]  ### axis-0 : trials
-    f_ALS_std1 = np.std(f_ALS_interpolated1, axis=0)
-    # print('!!! f_ALS_std1', f_ALS_std1)
-
-    f_ALS_avg2 = np.sum(f_ALS_interpolated2, axis=0) / f_ALS_interpolated2.shape[0]  ### axis-0 : trials
-    f_ALS_std2 = np.std(f_ALS_interpolated2, axis=0)
-    # print('!!! f_ALS_std2', f_ALS_std2)
-
-    f_MU_avg = np.sum(f_MU_interpolated, axis=0) / f_MU_interpolated.shape[0]  ### axis-0 : trials
-    f_MU_std = np.std(f_MU_interpolated, axis=0)
-    print('!!! f_MU_avg', f_MU_avg)
-    print('!!! f_MU_std', f_MU_std)
-
-    fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
-
-    markers, caps, bars = axs.errorbar(x_all_ALS0, f_ALS_avg0, yerr=f_ALS_std0,
-                                       fmt='r-', marker='*', label='ALS_DR-0.5', errorevery=5)
-    axs.fill_between(x_all_ALS0, f_ALS_avg0 - f_ALS_std0, f_ALS_avg0 + f_ALS_std0, facecolor='r', alpha=0.1)
-
-    markers, caps, bars = axs.errorbar(x_all_ALS1, f_ALS_avg1, yerr=f_ALS_std1,
-                                       fmt='b-', marker='*', label='ALS_DR-1', errorevery=5)
-    axs.fill_between(x_all_ALS1, f_ALS_avg1 - f_ALS_std1, f_ALS_avg1 + f_ALS_std1, facecolor='b', alpha=0.1)
-
-    markers, caps, bars = axs.errorbar(x_all_ALS2, f_ALS_avg2, yerr=f_ALS_std2,
-                                       fmt='c-', marker='*', label='ALS', errorevery=5)
-    axs.fill_between(x_all_ALS2, f_ALS_avg2 - f_ALS_std2, f_ALS_avg2 + f_ALS_std2, facecolor='c', alpha=0.1)
-
-    markers, caps, bars = axs.errorbar(x_all_MU, f_MU_avg, yerr=f_MU_std,
-                                       fmt='g-', marker='x', label='MU', errorevery=5)
-    axs.fill_between(x_all_MU, f_MU_avg - f_MU_std, f_MU_avg + f_MU_std, facecolor='g', alpha=0.2)
-    axs.set_xlim(0, min(max(x_all_ALS0), max(x_all_ALS1), max(x_all_ALS2), max(x_all_MU)))
-
-    [bar.set_alpha(0.5) for bar in bars]
-    # axs.set_ylim(0, np.maximum(np.max(f_OCPDL_avg + f_OCPDL_std), np.max(f_ALS_avg + f_ALS_std)) * 1.1)
-    axs.set_xlabel('Elapsed time (s)', fontsize=14)
-    axs.set_ylabel('Reconstruction error', fontsize=12)
-    plt.suptitle('Reconstruction error benchmarks')
-    axs.legend(fontsize=13)
-    plt.tight_layout()
-    plt.suptitle('Reconstruction error benchmarks', fontsize=13)
-    plt.subplots_adjust(0.1, 0.1, 0.9, 0.9, 0.00, 0.00)
-    if save_folder is None:
-        root = 'Output_files_BCD'
-    else:
-        root = save_folder
-
-    plt.savefig(root + '/benchmark_plot_errorbar' + '_ntrials_' + str(n_trials) + "_" + "_ncomps_" + str(
-        n_components) + "_" + str(name) + ".pdf")
-
-
-def main():
-    loading = {}
-    n_components = 5
-    iter = 20
-    num_repeat = 5
-    save_folder = "Output_files/test1"
-    # save_folder = "Output_files_BCD_twitter0"
-
-    synthetic_data = True
-    run_ALS = True
-    run_MU = True
-    plot_errors = True
+def main(n_components = 5,
+        iter = 10,
+        num_repeat = 2,
+        save_folder = "Output_files/test1",
+        data_name = "Synthetic", # or "Twitter"
+        run_ALS = True,
+        run_MU = True,
+        plot_errors = True):
 
     # Load data
-    file_name = "Synthetic"
-    if synthetic_data:
+
+    loading = {}
+
+    # Load data
+    if data_name == "Synthetic":
         np.random.seed(1)
-        U0 = np.random.rand(100, 5*n_components)
+        U0 = np.random.rand(100, 2*n_components)
         np.random.seed(2)
-        U1 = np.random.rand(100, 5*n_components)
+        U1 = np.random.rand(200, 2*n_components)
         np.random.seed(3)
-        U2 = np.random.rand(300, 5*n_components)
+        U2 = np.random.rand(300, 2*n_components)
 
         loading.update({'U0': U0})
         loading.update({'U1': U1})
         loading.update({'U2': U2})
 
-        X = Out_tensor(loading) * 10
-    else:
+        X = Out_tensor(loading)
+    elif data_name == "Twitter":
         path = "Data/Twitter/top_1000_daily/data_tensor_top1000.pickle"
         dict = pickle.load(open(path, "rb"))
         X = dict[1] * 10000
@@ -342,66 +215,71 @@ def main():
 
     # X = 10 * X/np.linalg.norm(X)
 
-    search_radius_const = np.linalg.norm(X.reshape(-1,1),1)
-    # search_radius_const = 1000
+    # search_radius_const = np.linalg.norm(X.reshape(-1,1),1)
+    search_radius_const = 1000
 
     loading_list = []
     for i in np.arange(num_repeat):
         loading_list.append(initialize_loading(data_shape=X.shape, n_components=n_components))
 
+    full_result_list = []
 
     if run_ALS:
-        ALS_result_list_dict = {}
-        ALS_subsample_ratio_list=[None]
         # beta_list = [1 / 2, 1, None]
         beta_list = [5, 1, 0.5, None]
-        for subsample_ratio in ALS_subsample_ratio_list:
-            print('!!! ALS subsample_ratio:', subsample_ratio)
-            for beta in beta_list:
-                print('!!! ALS initialized with beta:', beta)
-                list_full_timed_errors = []
-                iter1 = iter
+        for beta in beta_list:
+            print('!!! ALS initialized with beta:', beta)
+            list_full_timed_errors = []
+            results_dict = {}
+            for i in np.arange(num_repeat):
 
-                if subsample_ratio is not None:
-                    iter1 = iter1
+                result_dict_ALS = ALS_run(X,
+                                          n_components=n_components,
+                                          iter=iter,
+                                          regularizer=0,
+                                          # inverse regularizer on time mode (to promote long-lasting topics),
+                                          # no regularizer on on words and tweets
+                                          ini_loading=loading_list[i],
+                                          beta=beta,
+                                          search_radius_const=search_radius_const,
+                                          subsample_ratio=None,
+                                          if_compute_recons_error=True,
+                                          save_folder=save_folder,
+                                          output_results=True)
+                time_error = result_dict_ALS.get('time_error')
+                list_full_timed_errors.append(time_error.copy())
+                # print('!!! list_full_timed_errors', len(list_full_timed_errors))
 
-                for i in np.arange(num_repeat):
+            timed_errors_trials = np.asarray(
+                list_full_timed_errors)  # shape (# trials) x (2 for time, error) x (iterations)
 
-                    result_dict_ALS = ALS_run(X,
-                                              n_components=n_components,
-                                              iter=iter1,
-                                              regularizer=0,
-                                              # inverse regularizer on time mode (to promote long-lasting topics),
-                                              # no regularizer on on words and tweets
-                                              ini_loading=loading_list[i],
-                                              beta=beta,
-                                              search_radius_const=search_radius_const,
-                                              subsample_ratio=subsample_ratio,
-                                              if_compute_recons_error=True,
-                                              save_folder=save_folder,
-                                              output_results=True)
-                    time_error = result_dict_ALS.get('time_error')
-                    list_full_timed_errors.append(time_error.copy())
-                    # print('!!! list_full_timed_errors', len(list_full_timed_errors))
+            if beta is None:
+                results_dict.update({"method": "BCD"})
+            else:
+                results_dict.update({"method": "BCD-DR"})
+            results_dict.update({"data_name": data_name})
+            results_dict.update({"beta": beta})
+            results_dict.update({"search_radius_const": search_radius_const})
+            results_dict.update({"n_components": n_components})
+            results_dict.update({"iterations": iter})
+            results_dict.update({"num_trials": num_repeat})
+            results_dict.update({'timed_errors_trials': timed_errors_trials})
+            full_result_list.append(results_dict.copy())
 
-                timed_errors_trials = np.asarray(
-                    list_full_timed_errors)  # shape (# trials) x (2 for time, error) x (iterations)
-                result_dict_ALS.update({'timed_errors_trials': timed_errors_trials})
+            save_path = save_folder + "/full_result_list_" + str(data_name)
+            np.save(save_path, full_result_list)
+            # print('full_result_list:', full_result_list)
 
-                save_filename = "ALS_result_" + "beta_" + str(beta) + "_" + "subsample_" + str(subsample_ratio)
-                # np.save(save_folder + "/" + save_filename, result_dict_ALS)
-                ALS_result_list_dict.update({str(save_filename): result_dict_ALS})
-                np.save(save_folder + "/ALS_result_list_dict", ALS_result_list_dict)
-                print('ALS_result_list_dict.keys()', ALS_result_list_dict.keys())
-                result_dict_ALS = {}
 
     if run_MU:
-        list_full_timed_errors = []
+        results_dict = {}
         print('!!! MU initialized')
+        list_full_timed_errors = []
+        iter1 = iter*1.5
         for i in np.arange(num_repeat):
             result_dict_MU = MU_run(X,
                                     n_components=n_components,
-                                    iter=iter*1.5,
+                                    iter=iter1,
                                     regularizer=0,
                                     ini_loading=loading_list[i],
                                     if_compute_recons_error=True,
@@ -413,29 +291,32 @@ def main():
 
         timed_errors_trials = np.asarray(
             list_full_timed_errors)  # shape (# trials) x (2 for time, error) x (iterations)
-        result_dict_MU.update({'timed_errors_trials': timed_errors_trials})
 
-        np.save(save_folder + "/MU_result_" + str(file_name), result_dict_MU)
-        print('result_dict_MU.keys()', result_dict_MU.keys())
+        results_dict.update({"method": "MU"})
+        results_dict.update({"data_name": data_name})
+        results_dict.update({"n_components": n_components})
+        results_dict.update({"search_radius_const": search_radius_const})
+        results_dict.update({"iterations": iter1})
+        results_dict.update({"num_trials": num_repeat})
+        results_dict.update({'timed_errors_trials': timed_errors_trials})
+        full_result_list.append(results_dict.copy())
+
+        save_path = save_folder + "/full_result_list_" + str(data_name)
+        np.save(save_path, full_result_list)
+        # print('full_result_list:', full_result_list)
 
     if plot_errors:
-        save_filename = file_name + ".npy"
+        full_result_list = np.load(save_folder + "/full_result_list.npy", allow_pickle=True)
+        full_result_list = full_result_list[::-1]
+        n_trials = full_result_list[0].get("num_trials")
+        n_components = full_result_list[0].get('n_components')
+        search_radius_const = full_result_list[0].get('search_radius_const')
+        data_name = full_result_list[0].get('data_name')
 
-        ALS_result_list_dict = np.load(save_folder + "/ALS_result_list_dict.npy", allow_pickle=True).item()
+        save_path = save_folder + "/full_result_error_plot" + '_ntrials_' + str(n_trials) + "_" + "_ncomps_" + str(
+            n_components) + "_src_" + str(search_radius_const) + "_" + str(data_name) + ".pdf"
 
-        MU_result = np.load(save_folder + '/MU_result_' + save_filename, allow_pickle=True).item()
-        plot_benchmark_errors_list(ALS_result_list_dict, MU_result, name=1, save_folder=save_folder)
-
-
-        """
-        ALS_result0 = np.load(save_folder + '/ALS_result_beta_0.5_' + save_filename, allow_pickle=True).item()
-        ALS_result1 = np.load(save_folder + '/ALS_result_beta_1_' + save_filename, allow_pickle=True).item()
-        ALS_result2 = np.load(save_folder + '/ALS_result_beta_None_' + save_filename, allow_pickle=True).item()
-
-        MU_result = np.load(save_folder + '/MU_result_' + save_filename, allow_pickle=True).item()
-        plot_benchmark_errors(ALS_result0, ALS_result1, ALS_result2, MU_result, name=file_name,
-                              save_folder=save_folder)
-        """
+        plot_benchmark_errors(full_result_list, save_path=save_path)
 
 
 if __name__ == '__main__':

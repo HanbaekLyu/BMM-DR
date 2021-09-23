@@ -84,31 +84,6 @@ class ALS_DR():
             CPdict.update({'A' + str(i): A})
         return CPdict
 
-    def get_A_U(self, A, loading, j):
-        ### Compute (n_componetns) x (n_components) intermediate aggregation matrix
-        A_U = A
-        for k in np.arange(self.n_modes):
-            if k != j:
-                U = loading.get('U' + str(k))  ### I_{k} x n_components loading matrix
-                U = U.T @ U  ### (n_componetns) x (n_components) matrix
-                A_U = A_U * U
-        return A_U
-
-    def get_B_U(self, B, loading, j):
-        ### Compute (n_components) x (I_j) intermediate aggregation matrix
-        ### B has size (I_1 * I_2 * ... * I_n) x (n_componetns)
-
-        B_U = np.zeros(shape=(self.n_components, self.X.shape[j]))
-        for r in np.arange(self.n_components):
-            B_r = B[:, r].reshape(self.X.shape[:-1])
-            for i in np.arange(self.n_modes):
-                if i != j:
-                    U = loading.get('U' + str(i))  ### I_{k} x n_components loading matrix
-                    B_r = tl.tenalg.mode_dot(B_r, U[:, r], i)
-                    B_r = np.expand_dims(B_r, axis=i)  ## mode_i product above kills axis i
-            B_U[r, :] = B_r.reshape(self.X.shape[j])
-        return B_U
-
     def update_code_within_radius_trusted(self, X, W, H0, r, alpha=0, sub_iter=2, stopping_diff=0.1):
         '''
         Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
@@ -197,7 +172,10 @@ class ALS_DR():
 
         return H1
 
-    def update_code_within_radius(self, X, W, H0, r, alpha=0, sub_iter=[10], stopping_grad_ratio=0.05, subsample_ratio=None, nonnegativity=True):
+    def update_code_within_radius(self, X, W, H0, r, alpha=0,
+                                  sub_iter=[2], stopping_grad_ratio=0.0001,
+                                  subsample_ratio=None, nonnegativity=True,
+                                  use_line_search=False):
         '''
         Find \hat{H} = argmin_H ( | X - WH| + alpha|H| ) within radius r from H0
         Use row-wise projected gradient descent
@@ -219,76 +197,63 @@ class ALS_DR():
         i = 0
         dist = 1
         idx = np.arange(X.shape[0])
-        # print('!!! X.shape', X.shape)
+        H1_old = H1.copy()
+        if (subsample_ratio is not None):
+            idx = np.random.randint(X.shape[1], size=X.shape[1]//subsample_ratio)
+            A = W[:,:].T @ W[:,:]
+            B = W[:,:].T @ X[:,idx]
+        else:
+            A = W[:,:].T @ W[:,:]
+            B = W[:,:].T @ X[:,:]
+
         while (i < np.random.choice(sub_iter)):
             if_continue = np.ones(H0.shape[0])  # indexed by rows of H
-            H1_old = H1.copy()
-            b = 10
-            if (subsample_ratio is not None) and (X.shape[0]>X.shape[1]):
-                idx = np.random.randint(X.shape[0], size=X.shape[0]//subsample_ratio)
-                A = W[idx,:].T @ W[idx,:]
-                B = W[idx,:].T @ X[idx,:]
-                # print('!! row subsampled')
-                # print('!! len(idx)', len(idx))
-
-            elif (subsample_ratio is not None) and (X.shape[0]<= X.shape[1]):
-                idx = np.random.randint(X.shape[1], size=X.shape[1]//subsample_ratio)
-                A = W[:,:].T @ W[:,:]
-                B = W[:,:].T @ X[:,idx]
-            else:
-                A = W[:,:].T @ W[:,:]
-                B = W[:,:].T @ X[:,:]
 
             for k in [k for k in np.arange(H0.shape[0]) if if_continue[k]>0.5]:
 
-                grad = (np.dot(A[k, :], H1) - B[k, :] + alpha * np.ones(H0.shape[1]))
-                # grad = (np.dot(A[k, :], H1[:,idx]) - W[:,k].T @ X[:,idx] + alpha * np.ones(len(idx)))
-                # H1[k, :] = H1[k,:] - (1 / (A[k, k] + np.linalg.norm(grad, 2))) * grad
-                # H1[k, :] = H1[k, :] - (1 / (((i +np.random.choice([10])) ** (0.5)) * (A[k, k] + 1))) * grad
-
+                grad = (np.dot(A[k, :], H1) - B[k, :] + alpha * np.sign(H1[k, :]) * np.ones(H0.shape[1]))
                 grad_norm = np.linalg.norm(grad, 2)
-                # if k == 0:
-                #    print('!!! grad_norm= %f, k= %i' % (grad_norm/np.linalg.norm(H1_old, 2), k))
 
-                # print('!!! grad_norm', grad_norm)
-                # print('!!! np.linalg.norm(H1_old, 2)', np.linalg.norm(H1_old, 2))
-                # print('!!! grad_norm= %f, k= %i' % (grad_norm/np.linalg.norm(H1_old, 2), k))
-                # b = np.sqrt(b**2 + grad_norm**2)   # AdaGrad step size
-                # H1[k, :] = H1[k, :] - (1 / b) * grad
-                # H1[k, :] = H1[k, :] - (1 / (((i +np.random.choice([1])) ** (0.5)) * (A[k, k] + 1))) * grad
-                # step_size = (1 / (((i + 1) ** (1)) * (A[k, k] + 1)))
-                step_size = 1 / (np.trace(A)) # use the whole trace
-                # print('--- np.trace(A)', np.trace(A))
-                """
-                9/15/21: Make initial step size small to improve stability of the algorithm
-                (e.g., prevent loss increasing after hitting the bottom)
-                """
-
-                # step_size = (1 / (((i + 1) ** (1))))
-                # print('-- step_size before correction:', step_size)
+                # Initial step size
+                step_size = 1/(A[k,k]+1)
+                # step_size = 1 / (np.trace(A)) # use the whole trace
+                # step_size = 1
                 if r is not None:  # usual sparse coding without radius restriction
-
                     d = step_size * grad_norm
                     step_size = (r / max(r, d)) * step_size
-                    #print('-- step_size after correction:', step_size)
 
-                #print('-- change made', step_size * grad_norm / np.linalg.norm(H1_old, 2))
-                if step_size * grad_norm / np.linalg.norm(H1_old, 2) > stopping_grad_ratio:
-                    H1[k, :] = H1[k, :] - step_size * grad
-                else:
-                    #print('-- update not made ---')
-                    if_continue[k] = 1  # stop making changes when negligible
-                    # print('!!! update skipped' )
-                # print('!!! H1.shape', H1.shap
+                H1_temp = H1.copy()
+                # loss_old = np.linalg.norm(X - W @ H1)**2
+                H1_temp[k, :] = H1[k, :] - step_size * grad
                 if nonnegativity:
-                    H1[k,:] = np.maximum(H1[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
+                    H1_temp[k,:] = np.maximum(H1_temp[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
+                #loss_new = np.linalg.norm(X - W @ H1_temp)**2
+                #if loss_old > loss_new:
+                H1 = H1_temp
+                    # print('recons_loss:' , np.linalg.norm(X - W @ H1, ord=2) / np.linalg.norm(X, ord=2))
+                """
+                # Armijo backtraking line search
+                m = grad.T @ H1[k,:]
+                H1_temp = H1.copy()
+                loss_old = np.linalg.norm(X - W @ H1)**2
+                loss_new = 0
+                count = 0
+                while (count==0) or (loss_old - loss_new < 0.1 * step_size * m):
+                    step_size /= 2
+                    H1_temp[k, :] = H1[k, :] - step_size * grad
+                    if nonnegativity:
+                        H1_temp[k,:] = np.maximum(H1_temp[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
+                    loss_new = np.linalg.norm(X - W @ H1_temp)**2
+                    count += 1
+                    # print('--- loss_old - loss_new', loss_old - loss_new)
+                    # print('line search step size:', step_size)
+                    #print('count == ', count)
+                    #print('recons_loss:' , np.linalg.norm(X - W @ H1_temp, ord=2) / np.linalg.norm(X, ord=2))
+                    #print('recons loss tensor', self.compute_recons_error(data=self.X, loading=self.loading))
+                """
 
-                """
-                if r is not None:  # usual sparse coding without radius restriction
-                    d = np.linalg.norm(H1 - H0, 2)
-                    H1 = H0 + (r / max(r, d)) * (H1 - H0)
-                H0 = H1
-                """
+                # H1 = H1_temp
+
 
             # dist = np.linalg.norm(H1 - H1_old, 2) / np.linalg.norm(H1_old, 2)
             # print('!!! dist', dist)
@@ -321,7 +286,8 @@ class ALS_DR():
         ### X data tensor, loading = loading matrices
         ### Find sparse code and compute reconstruction error
         ### If X is full tensor,
-        c = self.sparse_code_tensor(X, self.out(loading))
+        # c = self.sparse_code_tensor(X, self.out(loading))
+        c = np.ones(len(loading.keys()))
         # print('X.shape', X.shape)
         # print('c.shape', c.shape)
         recons = self.inner_product_loading_code(loading, c.T)
@@ -411,6 +377,8 @@ class ALS_DR():
                     search_radius = search_radius_const * (float(step+1))**(-beta)/np.log(float(step+2))
 
                     # sparse code within radius
+                    # error = self.compute_recons_error(data=X, loading=loading)
+                    #print('recons_error_full ; ',error)
                     Code = self.update_code_within_radius(X_new_mat, W, U.T, search_radius,
                                                           alpha=0, subsample_ratio=subsample_ratio,
                                                           sub_iter = [5],
@@ -437,7 +405,7 @@ class ALS_DR():
         result_dict.update({'time_error': time_error.T})
         result_dict.update({'iter': iter})
         result_dict.update({'n_components': self.n_components})
-        np.save(save_folder + "/ALS_result_", result_dict)
+        #np.save(save_folder + "/ALS_result_", result_dict)
 
         if output_results:
             return result_dict
@@ -524,7 +492,7 @@ class ALS_DR():
         result_dict.update({'time_error': time_error.T})
         result_dict.update({'iter': iter})
         result_dict.update({'n_components': self.n_components})
-        np.save(save_folder + "/MU_result_", result_dict)
+        #np.save(save_folder + "/MU_result_", result_dict)
 
         if output_results:
             return result_dict
@@ -533,10 +501,25 @@ class ALS_DR():
 
 
     def compute_recons_error(self, data, loading):
+
         CPdict = self.out(loading, drop_last_mode=False)
         recons = np.zeros(data.shape)
-        for j in np.arange(len(loading.keys())):
+        for j in np.arange(len(CPdict.keys())):
             recons += CPdict.get('A' + str(j))
         error = np.linalg.norm((data - recons).reshape(-1, 1), ord=2)
-        error /= self.X_norm
+        error /= np.linalg.norm(data)
+
+        """
+        # using matricization (equivalent to the above)
+        X_new_mat = data.reshape(-1, data.shape[-1])
+        CPdict = self.out(loading, drop_last_mode=True)
+        H = loading.get('U' + str(self.n_modes))
+        W = np.zeros(shape=(X_new_mat.shape[0], self.n_components))
+        for j in np.arange(self.n_components):
+            W[:, j] = CPdict.get('A' + str(j)).reshape(-1, 1)[:, 0]
+
+        error = np.linalg.norm(X_new_mat - W @ H.T)
+        error /= np.linalg.norm(X_new_mat)
+        """
+
         return error
