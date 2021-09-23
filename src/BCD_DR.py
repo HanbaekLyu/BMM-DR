@@ -198,13 +198,9 @@ class ALS_DR():
         dist = 1
         idx = np.arange(X.shape[0])
         H1_old = H1.copy()
-        if (subsample_ratio is not None):
-            idx = np.random.randint(X.shape[1], size=X.shape[1]//subsample_ratio)
-            A = W[:,:].T @ W[:,:]
-            B = W[:,:].T @ X[:,idx]
-        else:
-            A = W[:,:].T @ W[:,:]
-            B = W[:,:].T @ X[:,:]
+        
+        A = W.T @ W
+        B = W.T @ X
 
         while (i < np.random.choice(sub_iter)):
             if_continue = np.ones(H0.shape[0])  # indexed by rows of H
