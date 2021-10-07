@@ -137,32 +137,28 @@ class ALS_DR():
                     H1_temp[k,:] = np.maximum(H1_temp[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
                 #loss_new = np.linalg.norm(X - W @ H1_temp)**2
                 #if loss_old > loss_new:
-                H1 = H1_temp
-                    # print('recons_loss:' , np.linalg.norm(X - W @ H1, ord=2) / np.linalg.norm(X, ord=2))
-                """
-                # Armijo backtraking line search
-                m = grad.T @ H1[k,:]
-                H1_temp = H1.copy()
-                loss_old = np.linalg.norm(X - W @ H1)**2
-                loss_new = 0
-                count = 0
-                while (count==0) or (loss_old - loss_new < 0.1 * step_size * m):
-                    step_size /= 2
-                    H1_temp[k, :] = H1[k, :] - step_size * grad
-                    if nonnegativity:
-                        H1_temp[k,:] = np.maximum(H1_temp[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
-                    loss_new = np.linalg.norm(X - W @ H1_temp)**2
-                    count += 1
-                    # print('--- loss_old - loss_new', loss_old - loss_new)
-                    # print('line search step size:', step_size)
-                    #print('count == ', count)
-                    #print('recons_loss:' , np.linalg.norm(X - W @ H1_temp, ord=2) / np.linalg.norm(X, ord=2))
-                    #print('recons loss tensor', self.compute_recons_error(data=self.X, loading=self.loading))
-                """
 
+                    # print('recons_loss:' , np.linalg.norm(X - W @ H1, ord=2) / np.linalg.norm(X, ord=2))
+
+                if use_line_search:
+                # Armijo backtraking line search
+                    m = grad.T @ H1[k,:]
+                    H1_temp = H1.copy()
+                    loss_old = np.linalg.norm(X - W @ H1)**2
+                    loss_new = 0
+                    count = 0
+                    while (count==0) or (loss_old - loss_new < 0.1 * step_size * m):
+                        step_size /= 2
+                        H1_temp[k, :] = H1[k, :] - step_size * grad
+                        if nonnegativity:
+                            H1_temp[k,:] = np.maximum(H1_temp[k,:], np.zeros(shape=(H1.shape[1],)))  # nonnegativity constraint
+                        loss_new = np.linalg.norm(X - W @ H1_temp)**2
+                        count += 1
+
+                H1 = H1_temp
 
             i = i + 1
-            
+
 
         return H1
 
@@ -281,7 +277,7 @@ class ALS_DR():
                     # sparse code within radius
                     # error = self.compute_recons_error(data=X, loading=loading)
                     #print('recons_error_full ; ',error)
-                    Code = self.update_code_within_radius(X_new_mat, W, U.T, search_radius,
+                    Code = self.update_code_within_radius(X_new_mat, W, U.T, r=search_radius,
                                                           alpha=0, subsample_ratio=subsample_ratio,
                                                           sub_iter = [5],
                                                           stopping_grad_ratio=0.0001,

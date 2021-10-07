@@ -147,7 +147,8 @@ def plot_benchmark_errors(full_result_list, save_path):
         if beta is None:
             label0 = result_dict.get("method")
         else:
-            label0 = result_dict.get("method") + " ($\\beta=${}, $c'=${})".format(beta, search_radius_const)
+            # label0 = result_dict.get("method") + " ($\\beta=${}, $c'=${:.0f})".format(beta, search_radius_const)
+            label0 = result_dict.get("method") + " ($\\beta=${}, $c'= \parallel X \parallel/10^5$)".format(beta)
 
         markers, caps, bars = axs.errorbar(x_all_0, f_avg0, yerr=f_std0,
                                            fmt=color+'-', marker=marker, label=label0, errorevery=5)
@@ -165,40 +166,56 @@ def plot_benchmark_errors(full_result_list, save_path):
 
     [bar.set_alpha(0.5) for bar in bars]
     # axs.set_ylim(0, np.maximum(np.max(f_OCPDL_avg + f_OCPDL_std), np.max(f_ALS_avg + f_ALS_std)) * 1.1)
-    axs.set_xlabel('Elapsed time (s)', fontsize=13)
-    axs.set_ylabel('Reconstruction error', fontsize=13)
+    axs.set_xlabel('Elapsed time (s)', fontsize=15)
+    axs.set_ylabel('Relative Recons. Error', fontsize=15)
     data_name = full_result_list[0].get('data_name')
     title = data_name
-    plt.suptitle(title, fontsize=13)
+    plt.suptitle(title, fontsize=15)
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
     axs.legend(fontsize=13)
     plt.tight_layout()
-    plt.subplots_adjust(0.1, 0.1, 0.9, 0.9, 0.00, 0.00)
+    plt.subplots_adjust(0.15, 0.1, 0.9, 0.9, 0.00, 0.00)
 
-    plt.savefig(save_path)
+    plt.savefig(save_path, bbox_inches='tight')
 
 
 
 def main(n_components = 5,
         iter = 10,
-        num_repeat = 2,
-        save_folder = "Output_files/test1",
+        num_repeat = 10,
+        save_folder = "Output_files/MP_test1",
         data_name = "Synthetic", # or "Twitter"
-        run_ALS = True,
-        run_MU = True,
+        run_ALS = False,
+        run_MU = False,
         plot_errors = True):
 
-    # Load data
 
+    if plot_errors:
+        full_result_list = np.load(save_folder + "/full_result_list_" + str(data_name) + ".npy", allow_pickle=True)
+        full_result_list = full_result_list[::-1]
+        n_trials = full_result_list[0].get("num_trials")
+        n_components = full_result_list[0].get('n_components')
+        search_radius_const = full_result_list[0].get('search_radius_const')
+        data_name = full_result_list[0].get('data_name')
+
+        save_path = save_folder + "/full_result_error_plot" + '_ntrials_' + str(n_trials) + "_" + "_ncomps_" + str(
+            n_components) + "_src_" + str(search_radius_const) + "_" + str(data_name) + ".pdf"
+
+        plot_benchmark_errors(full_result_list, save_path=save_path)
+        print('!!! plot saved')
+
+    # Load data
     loading = {}
 
     # Load data
     if data_name == "Synthetic":
         np.random.seed(1)
-        U0 = np.random.rand(100, 2*n_components)
+        U0 = np.random.rand(300, 10*n_components)
         np.random.seed(2)
-        U1 = np.random.rand(200, 2*n_components)
+        U1 = np.random.rand(300, 10*n_components)
         np.random.seed(3)
-        U2 = np.random.rand(300, 2*n_components)
+        U2 = np.random.rand(300, 10*n_components)
 
         loading.update({'U0': U0})
         loading.update({'U1': U1})
@@ -216,7 +233,8 @@ def main(n_components = 5,
     # X = 10 * X/np.linalg.norm(X)
 
     # search_radius_const = np.linalg.norm(X.reshape(-1,1),1)
-    search_radius_const = 1000
+    search_radius_const = np.linalg.norm(X.reshape(-1,1),1) / 100000
+    print('search_radius_const:', search_radius_const)
 
     loading_list = []
     for i in np.arange(num_repeat):
@@ -225,7 +243,7 @@ def main(n_components = 5,
     full_result_list = []
 
     if run_ALS:
-        # beta_list = [1 / 2, 1, None]
+        # beta_list = [5, None]
         beta_list = [5, 1, 0.5, None]
         for beta in beta_list:
             print('!!! ALS initialized with beta:', beta)
@@ -305,18 +323,7 @@ def main(n_components = 5,
         np.save(save_path, full_result_list)
         # print('full_result_list:', full_result_list)
 
-    if plot_errors:
-        full_result_list = np.load(save_folder + "/full_result_list.npy", allow_pickle=True)
-        full_result_list = full_result_list[::-1]
-        n_trials = full_result_list[0].get("num_trials")
-        n_components = full_result_list[0].get('n_components')
-        search_radius_const = full_result_list[0].get('search_radius_const')
-        data_name = full_result_list[0].get('data_name')
 
-        save_path = save_folder + "/full_result_error_plot" + '_ntrials_' + str(n_trials) + "_" + "_ncomps_" + str(
-            n_components) + "_src_" + str(search_radius_const) + "_" + str(data_name) + ".pdf"
-
-        plot_benchmark_errors(full_result_list, save_path=save_path)
 
 
 if __name__ == '__main__':
